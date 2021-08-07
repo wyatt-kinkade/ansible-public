@@ -1,0 +1,389 @@
+---
+- hosts: localhost
+  name: Create VM for Deployment
+  gather_facts: yes
+  vars_files:
+   - ../inventory/secrets/admin.yml
+   - ../inventory/secrets/systems.yml
+
+# Some context for this, there's an automated PXE boot that basically automatically installs Debian 10 onto a VM
+# This is built to provision the VM and configure a few other things (DNS, Netbox Entries, etc)
+# And yeah, a ton of this is either sensitive or variable so there's lots of variables here... give me an email @ wyatt@wyattkinkade.com if there's something confusing here
+
+  tasks:
+   - name: Fail if Address is not valid
+     fail:
+      msg: "{{ ip_cidr }} is not a valid IP address"
+     when:
+       - not ( ip_cidr | ipaddr )
+
+   - name: Fail if Address is not valid
+     fail:
+      msg: "{{ ip_cidr }} is not a valid IP address"
+     when:
+       - not ( gateway | ipaddr )
+
+   - name: Fail if /32
+     fail:
+      msg: "{{ ip_cidr }}"
+     when:
+       - ( ip_cidr | ipaddr('net') ) == "255.255.255.255"
+
+   - name: fail if Gateway not in same address space as IP
+     fail:
+      msg: "{{ gateway }} is not in the same network as {{ ip_cidr }} "
+     when: not ( gateway | ipaddr(ip_cidr) )
+
+   - name: Create and Install OS for "{{ guest_name }}"
+     delegate_to: localhost
+     vmware_guest:
+       folder: /Homelab/vm
+       hostname: "{{ vc_addr }}"
+       username: "{{ vc_user }}"
+       password: "{{ vc_pass }}"
+       validate_certs: no
+       datacenter: Homelab
+       name: '{{ guest_name }}'
+       state: poweredon
+       guest_id: debian10_64Guest 
+       esxi_hostname: "{{ vc_host }}"
+       disk:
+       - size_gb: "{{ mem_gb|int * 1024 }}"
+         type: thin
+         datastore: '{{ datastore }}'
+       hardware:
+         memory_mb: "{{ mem_gb|int * 1024 }}"
+         num_cpus: "{{ cpu_count|int }}"
+       networks:
+       - name: "192.168.3.x (VLAN 50)"
+
+   - name: Pause for 7 minutes to Allow Installation to complete
+     pause:
+       minutes: 7
+
+   - name: Change Distributed Port Group on "{{ guest_name }}"
+     delegate_to: localhost
+     vmware_guest:
+       folder: /Homelab/vm
+       hostname: "{{ vc_addr }}"
+       username: "{{ vc_user }}"
+       password: "{{ vc_pass }}"
+       validate_certs: no
+       datacenter: Homelab
+       name: '{{ guest_name }}'
+       networks:
+       - name: "{{ dist_port_group }}"
+     when: 
+     - dist_port_group != "192.168.3.x (VLAN 50)"
+
+   - name: Reboot "{{ guest_name }}" - Shutdown
+     vmware_guest:
+       hostname: "{{ vc_addr }}"
+       username: "{{ vc_user }}"
+       password: "{{ vc_pass }}"
+       validate_certs: no
+       datacenter: Homelab
+       name: "{{ guest_name }}"
+       state: shutdownguest
+       state_change_timeout: 240
+
+   - name: Reboot "{{ guest_name }}" - Startup
+     vmware_guest:
+       hostname: "{{ vc_addr }}"
+       username: "{{ vc_user }}"
+       password: "{{ vc_pass }}"
+       validate_certs: no
+       datacenter: Homelab
+       name: "{{ guest_name }}"
+       state: poweredon
+       wait_for_ip_address: yes
+     register: vm_out
+
+   - name: Add the host
+     add_host:
+       name: "{{ vm_out.instance.hw_name }}"
+       ansible_connection: ssh
+       ansible_host: "{{ vm_out.instance.ipv4 }}"
+       ansible_become_method: "{{ lin_become_method }}"
+       ansible_become_password: "{{ lin_become_password }}"
+       ansible_ssh_pass: "{{ lin_ssh_pass }}"
+       ansible_user: "{{ lin_user }}"
+
+   - name: Gather facts from db servers
+     ansible.builtin.setup:
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: DEBUG
+     debug:
+       var: ansible_facts
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: DEBUG
+     debug:
+       var:  ansible_facts.default_ipv4.interface 
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Create DVS Name List from Dictionary
+     set_fact:
+       eth_if: "{{ ansible_facts.default_ipv4.interface }}"
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Connect to host and replace /etc/network/interfaces
+     template:
+       src: ../templates/vm_deploy_interfaces.j2
+       dest: /etc/network/interfaces
+       owner: root
+       group: root
+       mode: '644'
+     become: true
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Connect to host and replace /etc/resolv.conf
+     template:
+       src: ../templates/vm_deploy_dns.j2
+       dest: /etc/resolv.conf
+       owner: root
+       group: root
+       mode: '644'
+     become: true
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Connect to host and replace /etc/hostname
+     template:
+       src: ../templates/vm_deploy_hostname.j2
+       dest: /etc/hostname
+       owner: root
+       group: root
+       mode: '644'
+     become: true
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Create .ssh folder
+     shell:
+       cmd: mkdir -m 700 ~/.ssh
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Connect to host and replace /etc/hostname
+     template:
+       src: ../templates/vm_deploy_ssh.j2
+       dest: ~/.ssh/authorized_keys
+       owner: xifgay
+       group: xifgay
+       mode: '600'
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Fix Hostname Issues
+     ansible.builtin.lineinfile:
+       path: /etc/hosts
+       insertbefore: BOF
+       line: "127.0.1.1 \t{{ guest_name }}"
+     become: true
+     delegate_to: "{{ vm_out.instance.hw_name }}"
+
+   - name: Reboot "{{ guest_name }}" - Shutdown
+     vmware_guest:
+       hostname: "{{ vc_addr }}"
+       username: "{{ vc_user }}"
+       password: "{{ vc_pass }}"
+       validate_certs: no
+       datacenter: Homelab
+       name: "{{ guest_name }}"
+       state: shutdownguest
+       state_change_timeout: 240
+
+   - name: Reboot "{{ guest_name }}" - Startup
+     vmware_guest:
+       hostname: "{{ vc_addr }}"
+       username: "{{ vc_user }}"
+       password: "{{ vc_pass }}"
+       validate_certs: no
+       datacenter: Homelab
+       name: "{{ guest_name }}"
+       state: poweredon
+       wait_for_ip_address: yes
+
+   - name: Add virtual machine to Netbox
+     netbox.netbox.netbox_virtual_machine:
+       netbox_url: "{{ nb_url }}"
+       netbox_token: "{{ nb_token }}"
+       validate_certs: no
+       data:
+         name: "{{guest_name}}"
+         status: Active
+         cluster: Home vCenter
+         site: Home
+         tenant: Personal
+         virtual_machine_role: Service
+         platform: Linux
+         vcpus: "{{ cpu_count }}"
+         memory: "{{ mem_gb|int * 1024 }}"
+         disk: "{{ drive_gb }}"
+       state: present
+     delegate_to: localhost
+
+   - name: "Create interface within Netbox for {{ guest_name }}"
+     netbox.netbox.netbox_vm_interface:
+       validate_certs: no
+       netbox_url: "{{ nb_url }}"
+       netbox_token: "{{ nb_token }}"
+       data:
+         virtual_machine: "{{ guest_name }}"
+         name: "{{ eth_if }}"
+       state: present
+
+   - name: "Add IP to {{ guest_name }} {{ eth_if }} in Netbox"
+     netbox.netbox.netbox_ip_address:
+       validate_certs: no
+       netbox_url: "{{ nb_url }}"
+       netbox_token: "{{ nb_token }}"
+       data:
+         address: "{{ ip_cidr }}"
+         assigned_object:
+           name: "{{ eth_if }}"
+           virtual_machine: "{{ guest_name }}"
+       state: new
+     when:
+       - a_record is not defined or suffix is not defined
+
+   - name: "Add IP and DNS to {{ guest_name }} {{ eth_if }} in Netbox"
+     netbox.netbox.netbox_ip_address:
+       validate_certs: no
+       netbox_url: "{{ nb_url }}"
+       netbox_token: "{{ nb_token }}"
+       data:
+         address: "{{ ip_cidr }}"
+         dns_name:  "{{a_record}}.{{suffix}}"
+         assigned_object:
+           name: "{{ eth_if }}"
+           virtual_machine: "{{ guest_name }}"
+       state: new
+     when:
+       - a_record is defined
+       - suffix is defined
+
+   - name: Add IP to virtual machine to Netbox
+     netbox.netbox.netbox_virtual_machine:
+       netbox_url: "{{ nb_url }}"
+       netbox_token: "{{ nb_token }}"
+       validate_certs: no
+       data:
+         name: "{{guest_name}}"
+         primary_ip4: "{{ ip_cidr }}"
+       state: present
+     delegate_to: localhost
+
+   - name: Add the host
+     add_host:
+       name: "{{ dc_quickadd_name }}" 
+       ansible_host: "{{ dc_quickadd_ip }}"
+       ansible_shell_type: "{{ win_shell_type }}"
+       ansible_user: "{{ win_user }}"
+       ansible_connection: "{{ win_connection }}"
+       ansible_password: "{{ win_password }}"
+     when:
+       - a_record is defined
+       - suffix is defined
+
+   - name: Configure A record
+     community.windows.win_dns_record:
+       name: "{{a_record}}"
+       type: "A"
+       value: "{{ ip_cidr | ipaddr('address') }}"
+       zone: "{{suffix}}"
+     delegate_to: HOMEDC1
+     when:
+       - a_record is defined
+       - suffix is defined
+
+   - name: Create CNAME record
+     community.windows.win_dns_record:
+       name: "{{cname_record}}"
+       type: "CNAME"
+       value: "{{a_record}}.{{suffix}}"
+       zone: "{{suffix}}"
+     delegate_to: HOMEDC1
+     when:
+       - a_record is defined
+       - cname_record is defined
+       - suffix is defined
+
+   - name: Mail Alerts
+     mail:
+       host: mail.wyattkinkade.com
+       port: 587
+       username: "{{ alerts_mail_acct }}"
+       password: "{{ alerts_mail_pw }}"
+       to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+       from: "Alerts <{{ alerts_mail_acct }}>"
+       subject: Linux VM Deployment Successful
+       body: "System {{ guest_name }} was successfully deployed to {{ vc_host }} it can be reached at {{ ip_cidr | ipaddr('address') }} or {{a_record}}.{{suffix}} or {{cname_record}}.{{suffix}}"
+     when:
+       - a_record is defined
+       - cname_record is defined
+       - suffix is defined
+
+   - name: "Send a notification that the Remote DIA Circuit and associated objects have been removed"
+     community.general.slack:
+       token: "{{ slack_token }}"
+       msg: "System {{ guest_name }} was successfully deployed\nHost: {{ vc_host }}\nIP: {{ ip_cidr | ipaddr('address') }}\nPrimary DNS Record: {{a_record}}.{{suffix}}\nAlternate DNS Record: {{cname_record}}.{{suffix}}\nDrive Space: {{ drive_gb }} GB\nMemory: {{ mem_gb|int * 1024 }} MB\nAssigned Cores: {{ cpu_count }}"
+       channel: '#random'
+       color: good
+       validate_certs: no
+     when:
+       - a_record is defined
+       - cname_record is defined
+       - suffix is defined
+
+   - name: Mail Alerts
+     mail:
+       host: mail.wyattkinkade.com
+       port: 587
+       username: "{{ alerts_mail_acct }}"
+       password: "{{ alerts_mail_pw }}"
+       to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+       from: "Alerts <{{ alerts_mail_acct }}>"
+       subject: Linux VM Deployment Successful
+       body: "System {{ guest_name }} was successfully deployed to {{ vc_host }} it can be reached at {{ ip_cidr | ipaddr('address') }} or {{a_record}}.{{suffix}}"
+     when:
+       - a_record is defined
+       - cname_record is undefined
+       - suffix is defined
+
+   - name: "Send a notification that the Remote DIA Circuit and associated objects have been removed"
+     community.general.slack:
+       token: "{{ slack_token }}"
+       msg: "System {{ guest_name }} was successfully deployed\nHost: {{ vc_host }}\nIP: {{ ip_cidr | ipaddr('address') }}\nPrimary DNS Record: {{a_record}}.{{suffix}}\nDrive Space: {{ drive_gb }} GB\nMemory: {{ mem_gb|int * 1024 }} MB\nAssigned Cores: {{ cpu_count }}"
+       channel: '#random'
+       color: good
+       validate_certs: no
+     when:
+       - a_record is defined
+       - cname_record is undefined
+       - suffix is defined
+
+   - name: Mail Alerts
+     mail:
+       host: mail.wyattkinkade.com
+       port: 587
+       username: "{{ alerts_mail_acct }}"
+       password: "{{ alerts_mail_pw }}"
+       to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+       from: "Alerts <{{ alerts_mail_acct }}>"
+       subject: Linux VM Deployment Successful
+       body: "System {{ guest_name }} was successfully deployed to {{ vc_host }} it can be reached at {{ ip_cidr | ipaddr('address') }}"
+     when:
+       - a_record is undefined
+       - cname_record is undefined
+       - suffix is defined
+
+   - name: "Send a notification that the Remote DIA Circuit and associated objects have been removed"
+     community.general.slack:
+       token: "{{ slack_token }}"
+       msg: "System {{ guest_name }} was successfully deployed\nHost: {{ vc_host }}\nIP: {{ ip_cidr | ipaddr('address') }}\nDrive Space: {{ drive_gb }} GB\nMemory: {{ mem_gb|int * 1024 }} MB\nAssigned Cores: {{ cpu_count }}"
+       channel: '#random'
+       color: good
+       validate_certs: no
+     when:
+       - a_record is undefined
+       - cname_record is undefined
+       - suffix is defined

@@ -1,0 +1,147 @@
+---
+- hosts: "{{ selected_devices }}"
+  gather_facts: yes
+#  vars_prompt:
+#    - name: rhel_pkg
+#      prompt: Package to install for CentOS (Keep in mind this needs to have the right name for the YUM package manager)
+#      private: no
+#    - name: deb_pkg
+#      prompt: Package to install for Debian (Keep in mind this needs to have the right name for the APT package manager)
+#      private: no
+#    - name: selected_devices
+#      prompt: What Device(s) updates are needed for
+#      private: no
+  vars_files:
+    - ../inventory/secrets/admin.yml
+
+  tasks:
+
+    - name: Upgrade Package - CentOS
+      yum:
+        name: '{{ rhel_pkg }}'
+        state: latest
+      register: rhel_results
+      become: yes
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+      - rhel_pkg.lower() != "all" 
+
+    - name: Upgrade all packages
+      yum:
+        name: '*'
+        state: latest
+      register: rhel_results
+      become: yes
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+      - rhel_pkg.lower() == "all" 
+
+    - debug:
+        msg: "{{ rhel_results }}"
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+
+    - name: Mail Alerts
+      mail:
+        host: mail.wyattkinkade.com
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+        from: "Alerts <{{ alerts_mail_acct }}>"
+        subject: Package Update Successful
+        body: "System {{ inventory_hostname }} has successfully updated {{ rhel_pkg }}"
+      delegate_to: localhost
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+      - rhel_results.failed == false
+      - rhel_results.changed == true
+      - rhel_pkg.lower() != "all" 
+
+    - name: Mail Alerts
+      mail:
+        host: mail.wyattkinkade.com
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+        from: "Alerts <{{ alerts_mail_acct }}>"
+        subject: System Update Successful
+        body: "System {{ inventory_hostname }} has successfully been updated"
+      delegate_to: localhost
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+      - rhel_results.failed == false
+      - rhel_results.changed == true
+      - rhel_pkg.lower() == "all" 
+
+    - name: Upgrade Package - Debian
+      apt:
+        update_cache: yes
+        name: "{{ deb_pkg }}"
+        state: absent
+      register: deb_results
+      become: yes
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+      - deb_pkg.lower() != "all" 
+
+    - name: Upgrade all packages
+      apt:
+        update_cache: yes
+        name: '*'
+        state: latest
+      register: deb_results
+      become: yes
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined 
+      - deb_pkg.lower() == "all" 
+
+    - debug:
+        msg: "{{ deb_results }}"
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+
+    - name: Mail Alerts
+      mail:
+        host: mail.wyattkinkade.com
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+        from: "Alerts <{{ alerts_mail_acct }}>"
+        subject: Package Update Successful
+        body: "System {{ inventory_hostname }} has successfully updated {{ deb_pkg }}"
+      delegate_to: localhost
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+      - deb_results.failed == false
+      - deb_results.changed == true
+      - deb_pkg.lower() != "all" 
+
+    - name: Mail Alerts
+      mail:
+        host: mail.wyattkinkade.com
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+        from: "Alerts <{{ alerts_mail_acct }}>"
+        subject: System Update Successful
+        body: "System {{ inventory_hostname }} has successfully been updated"
+      delegate_to: localhost
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+      - deb_results.failed == false
+      - deb_results.changed == true
+      - deb_pkg.lower() == "all" 

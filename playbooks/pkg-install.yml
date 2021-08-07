@@ -1,0 +1,86 @@
+---
+- hosts: "{{ selected_devices }}"
+  gather_facts: yes
+#  vars_prompt:
+#    - name: rhel_pkg
+#      prompt: Package to install for CentOS (Keep in mind this needs to have the right name for the YUM package manager)
+#      private: no
+#    - name: deb_pkg
+#      prompt: Package to install for Debian (Keep in mind this needs to have the right name for the APT package manager)
+#      private: no
+#    - name: selected_devices
+#      prompt: What Device(s) updates are needed for
+#      private: no
+  vars_files:
+    - ../inventory/secrets/admin.yml
+
+  tasks:
+
+    - name: Installation - CentOS
+      yum:
+        name: '{{ rhel_pkg }}'
+        state: present
+      register: rhel_results
+      become: yes
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+
+    - debug:
+        msg: "{{ rhel_results }}"
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+
+    - name: Mail Alerts
+      mail:
+        host: mail.wyattkinkade.com
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+        from: "Alerts <{{ alerts_mail_acct }}>"
+        subject: Package Installation Successful
+        body: "System {{ inventory_hostname }} has successfully installed {{ rhel_pkg }}"
+      delegate_to: localhost
+      when: 
+      - ansible_os_family == "RedHat"
+      - rhel_pkg is not undefined 
+      - rhel_results.failed == false
+      - rhel_results.changed == true
+
+
+
+    - name: Installation - Debian
+      apt:
+        update_cache: yes
+        name: "{{ deb_pkg }}"
+        state: present
+      register: deb_results
+      become: yes
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+
+    - debug:
+        msg: "{{ deb_results }}"
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+
+    - name: Mail Alerts
+      mail:
+        host: mail.wyattkinkade.com
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
+        from: "Alerts <{{ alerts_mail_acct }}>"
+        subject: Package Installation Successful
+        body: "System {{ inventory_hostname }} has successfully installed {{ deb_pkg }}"
+      delegate_to: localhost
+      when: 
+      - ansible_os_family == "Debian"
+      - deb_pkg is not undefined
+      - deb_results.failed == false
+      - deb_results.changed == true
