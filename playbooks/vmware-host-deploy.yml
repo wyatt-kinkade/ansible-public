@@ -309,12 +309,12 @@
 
    - name: Mail Alerts
      mail:
-       host: mail.wyattkinkade.com
+       host: "{{ mail_srv }}"
        port: 587
        username: "{{ alerts_mail_acct }}"
        password: "{{ alerts_mail_pw }}"
-       to: Wyatt Kinkade <wyatt@wyattkinkade.com>
-       from: "Alerts <{{ alerts_mail_acct }}>"
+       to: "{{ to_address }}"
+       from: "{{ alerts_mail_acct }}"
        subject: Linux VM Deployment Successful
        body: "System {{ guest_name }} was successfully deployed to {{ vc_host }} it can be reached at {{ ip_cidr | ipaddr('address') }} or {{a_record}}.{{suffix}} or {{cname_record}}.{{suffix}}"
      when:
@@ -322,7 +322,7 @@
        - cname_record is defined
        - suffix is defined
 
-   - name: "Send a notification that the Remote DIA Circuit and associated objects have been removed"
+   - name: "Send a notification that VM Successfully Deployed"
      community.general.slack:
        token: "{{ slack_token }}"
        msg: "System {{ guest_name }} was successfully deployed\nHost: {{ vc_host }}\nIP: {{ ip_cidr | ipaddr('address') }}\nPrimary DNS Record: {{a_record}}.{{suffix}}\nAlternate DNS Record: {{cname_record}}.{{suffix}}\nDrive Space: {{ drive_gb }} GB\nMemory: {{ mem_gb|int * 1024 }} MB\nAssigned Cores: {{ cpu_count }}"
@@ -336,12 +336,12 @@
 
    - name: Mail Alerts
      mail:
-       host: mail.wyattkinkade.com
+       host: "{{ mail_srv }}"
        port: 587
        username: "{{ alerts_mail_acct }}"
        password: "{{ alerts_mail_pw }}"
-       to: Wyatt Kinkade <wyatt@wyattkinkade.com>
-       from: "Alerts <{{ alerts_mail_acct }}>"
+       to: "{{ to_address }}"
+       from: "{{ alerts_mail_acct }}"
        subject: Linux VM Deployment Successful
        body: "System {{ guest_name }} was successfully deployed to {{ vc_host }} it can be reached at {{ ip_cidr | ipaddr('address') }} or {{a_record}}.{{suffix}}"
      when:
@@ -349,7 +349,7 @@
        - cname_record is undefined
        - suffix is defined
 
-   - name: "Send a notification that the Remote DIA Circuit and associated objects have been removed"
+   - name: "Send a notification that VM Successfully Deployed"
      community.general.slack:
        token: "{{ slack_token }}"
        msg: "System {{ guest_name }} was successfully deployed\nHost: {{ vc_host }}\nIP: {{ ip_cidr | ipaddr('address') }}\nPrimary DNS Record: {{a_record}}.{{suffix}}\nDrive Space: {{ drive_gb }} GB\nMemory: {{ mem_gb|int * 1024 }} MB\nAssigned Cores: {{ cpu_count }}"
@@ -363,12 +363,12 @@
 
    - name: Mail Alerts
      mail:
-       host: mail.wyattkinkade.com
+       host: "{{ mail_srv }}"
        port: 587
        username: "{{ alerts_mail_acct }}"
        password: "{{ alerts_mail_pw }}"
-       to: Wyatt Kinkade <wyatt@wyattkinkade.com>
-       from: "Alerts <{{ alerts_mail_acct }}>"
+       to: "{{ to_address }}"
+       from: "{{ alerts_mail_acct }}"
        subject: Linux VM Deployment Successful
        body: "System {{ guest_name }} was successfully deployed to {{ vc_host }} it can be reached at {{ ip_cidr | ipaddr('address') }}"
      when:
@@ -376,7 +376,7 @@
        - cname_record is undefined
        - suffix is defined
 
-   - name: "Send a notification that the Remote DIA Circuit and associated objects have been removed"
+   - name: "Send a notification that VM Successfully Deployed"
      community.general.slack:
        token: "{{ slack_token }}"
        msg: "System {{ guest_name }} was successfully deployed\nHost: {{ vc_host }}\nIP: {{ ip_cidr | ipaddr('address') }}\nDrive Space: {{ drive_gb }} GB\nMemory: {{ mem_gb|int * 1024 }} MB\nAssigned Cores: {{ cpu_count }}"

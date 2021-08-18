@@ -34,12 +34,12 @@
 
     - name: Mail Alerts
       mail:
-        host: mail.wyattkinkade.com
+        host: "{{ mail_srv }}"
         port: 587
         username: "{{ alerts_mail_acct }}"
         password: "{{ alerts_mail_pw }}"
-        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
-        from: "Alerts <{{ alerts_mail_acct }}>"
+        to: "{{ to_address }}"
+        from: "{{ alerts_mail_acct }}"
         subject: Package Removal Successful
         body: "System {{ inventory_hostname }} has successfully uninstalled {{ rhel_pkg }}"
       delegate_to: localhost
@@ -68,12 +68,12 @@
 
     - name: Mail Alerts
       mail:
-        host: mail.wyattkinkade.com
+        host: "{{ mail_srv }}"
         port: 587
         username: "{{ alerts_mail_acct }}"
         password: "{{ alerts_mail_pw }}"
-        to: Wyatt Kinkade <wyatt@wyattkinkade.com>
-        from: "Alerts <{{ alerts_mail_acct }}>"
+        to: "{{ to_address }}"
+        from: "{{ alerts_mail_acct }}"
         subject: Package Removal Successful
         body: "System {{ inventory_hostname }} has successfully uninstalled {{ deb_pkg }}"
       delegate_to: localhost
