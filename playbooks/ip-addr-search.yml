@@ -1,0 +1,188 @@
+---
+# As a Preface, this task would be a bit more convenient in python, honestly this is more of an example or something to use to tie into other bits to achieve a desired result
+- name: MAC Address Lookup 
+  hosts: "{{ gateway_device }}"
+  gather_facts: false
+  vars:
+    mac_addr: []
+  vars_files:
+   - ../inventory/secrets/admin.yml
+   - ../inventory/secrets/systems.yml
+
+  tasks:
+    - name: Setting Initial Facts set full IP addresses to use Cisco Formatting
+      set_fact:
+        ipaddress_list: "{{ ipaddress.replace(' ','').split(',') }}"
+
+    - name: Gather and Parse MAC Addresses in the MAC Address Table
+      ansible.netcommon.cli_parse:
+        command: "show ip arp | i Protocol{% for item in ipaddress_list %}|{{ item }}{% endfor %}" 
+        parser:
+          name: ansible.netcommon.ntc_templates
+        set_fact: ios_arp_info
+      when: ansible_network_os == 'cisco.ios.ios'
+
+    - name: Gather and Parse MAC Addresses in the MAC Address Table
+      ansible.netcommon.cli_parse:
+        command: "show arp | i {% for item in ipaddress_list %}{% if loop.first %}{{ item }}{% else %}|{{ item }}{% endif %}{% endfor %}"
+        parser:
+          name: ansible.netcommon.ntc_templates
+        set_fact: asa_arp_info
+      when: ansible_network_os == 'cisco.asa.asa'
+
+- name: MAC Address Lookup 
+  hosts: "{{ access_devices }}"
+  gather_facts: false
+  vars:
+    mac_addr: []
+  vars_files:
+   - ../inventory/secrets/admin.yml
+   - ../inventory/secrets/systems.yml
+
+  tasks:
+    - name: Set arp_objects fact when dev is IOS
+      set_fact:
+        arp_objects: "{{ hostvars[vars['gateway_device']]['ios_arp_info'] }}"
+      when: hostvars[vars['gateway_device']]['ios_arp_info'] is defined
+
+    - name: Set arp_objects fact when dev is ASA
+      set_fact:
+        arp_objects: "{{ hostvars[vars['gateway_device']]['asa_arp_info'] }}"
+      when: hostvars[vars['gateway_device']]['asa_arp_info'] is defined
+
+    - name: Gather and Parse MAC Addresses in the MAC Address Table
+      ansible.netcommon.cli_parse:
+        command: "show mac address-table dynamic | i Mac|-{% for item in arp_objects %}| {{ item.mac }}{% endfor %}"
+        parser:
+          name: ansible.netcommon.ntc_templates
+        set_fact: mac_table
+
+    - name: Pull switchport interface info for the port the MAC address is on
+      ansible.netcommon.cli_parse:
+        command: "show interfaces {{ item.destination_port }} switchport"
+        parser:
+          name: ansible.netcommon.ntc_templates
+          command: show interfaces switchport
+      register: switchport_info
+      loop: "{{ mac_table }}"
+
+    - name: Seperate Parsed Information into List of relevant dictionaries
+      set_fact:
+        parsed_swp_info: "{{ parsed_swp_info|default([]) +  item.0.parsed }}"
+      loop: "{{ switchport_info.results|subelements('parsed') }}"
+
+    - name: Pull General Interface Info
+      ansible.netcommon.cli_parse:
+        command: "show interfaces {{ item.destination_port }}"
+        parser:
+          name: ansible.netcommon.ntc_templates
+          command: show interfaces
+      register: port_info
+      loop: "{{ mac_table }}"
+
+    - name: Seperate Parsed Information into List of relevant dictionaries
+      set_fact:
+        parsed_port_info: "{{ parsed_port_info|default([]) +  item.0.parsed }}"
+      loop: "{{ port_info.results|subelements('parsed') }}"
+
+    - name: Generate List of Dicts from the past two CLI parsings
+      set_fact:
+        swp_info_mac_table: "{{ swp_info_mac_table|default([])  + [ item.0 | combine(item.1) ] }}"
+      loop: "{{ parsed_swp_info|zip(mac_table)|list }}"
+
+    - name: Combine table data with port basic information
+      set_fact:
+        full_info: "{{ full_info|default([])  + [ item.0 | combine(item.1) ] }}"
+      loop: "{{ mac_table|zip(parsed_port_info)|list }}"
+
+    - name: Combine CAM ARP and Port data
+      set_fact:
+        full_info: "{{
+          full_info | rejectattr('address','equalto',item.address) | list
+          + [ 
+              (full_info | selectattr('address','equalto',item.address) | list)[0] 
+              | combine((parsed_swp_info|selectattr('interface','equalto',item.destination_port)|list)[0])
+              | combine({'ip': (arp_objects|selectattr('mac','equalto',item.destination_address)|list)[0].address})
+            ]
+        }}"
+      loop: "{{ full_info }}"
+
+#I'd do this a "right way", but any way I've found usually is either janky, or well doesn't work. 
+#https://github.com/ansible/ansible/issues/68364
+#Thankfully the coreutils exist as well as templating features
+
+    - name: create html_tables 
+      template:
+        src: '{{playbook_dir}}/../templates/ip-addr-search-mail-bodies.j2'
+        dest: '/tmp/{{inventory_hostname}}-mail-bodies.html'
+        mode: 0666
+      delegate_to: localhost
+
+    - name: create_headers 
+      template:
+        src: '{{playbook_dir}}/../templates/ip-addr-search-mail-headers.j2'
+        dest: '/tmp/mail-html-headers.html'
+        mode: 0666
+      delegate_to: localhost
+      run_once: true
+
+    - name: Concatenate All Mail HTML's
+      shell: cat /tmp/mail-html-headers.html /tmp/*-mail-bodies.html >> /tmp/combinedmail.html
+      delegate_to: localhost
+      run_once: true
+
+    - name: Remove Old Mail HTML's
+      shell: rm /tmp/*-mail-*.html 
+      delegate_to: localhost
+      run_once: true
+
+    - name: Mail Alerts
+      mail:
+        host: "{{ mail_srv }}"
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: "{{ to_address }}" 
+        from: "{{ alerts_mail_acct }}"
+        subject: MAC Address Locations with Information
+        subtype: html
+        body: "{{ lookup('file', '/tmp/combinedmail.html') }}"
+      delegate_to: localhost
+      run_once: true
+      when:
+      - to_address is defined
+      - cc_recipients is undefined
+
+    - name: Mail Alerts
+      mail:
+        host: "{{ mail_srv }}"
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: "{{ to_address }}" 
+        cc: "{{ cc_recipients }}"
+        from: "{{ alerts_mail_acct }}"
+        subject: MAC Address Locations with Information
+        subtype: html
+        body: "{{ lookup('file', '/tmp/combinedmail.html') }}"
+      delegate_to: localhost
+      run_once: true
+      when:
+      - to_address is defined
+      - cc_recipients is defined
+
+#Needs rewritten I suppose
+    - name: "Configure Slack Response"
+      community.general.slack:
+        token: "{{ slack_token }}"
+        msg: "Formatting may be less than amazing, if you desire better formatting a table was sent to the following addresses\n {% for mail in to_address %}{% if loop.last %}{{ mail }}\n{% else %}{{ mail }},\n{% endif %}{% endfor %}\n**{{inventory_hostname}}**\n```MAC Address\t   Port\t\tVLAN\tPort Mode\tInterface Description\n{% for item in full_info %} {% if loop.last %}{{ item.destination_address }}\t{{ item.destination_port }}\t{{ item.vlan }}\t  {{ item.mode }}\t\t{{ item.description }}{% else %}{{ item.destination_address }}\t{{ item.destination_port }}\t{{ item.vlan }}\t  {{ item.mode }}\t\t{{ item.description }}\n{% endif %}{% endfor %}```"
+        channel: '#random'
+        color: normal
+        validate_certs: no
+      delegate_to: localhost
+
+    - name: Concatenate All Mail HTML's
+      shell: rm /tmp/combinedmail.html
+      delegate_to: localhost
+      run_once: true
+
