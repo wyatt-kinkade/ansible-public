@@ -1,0 +1,11 @@
+plugin: netbox.netbox.nb_inventory
+validate_certs: False
+config_context: True
+api_endpoint: https://netbox.hometest.local
+token: ZnVjayBqYW5uaWVzCgbc5a293c28f3ced4234
+group_by:
+ - device_roles
+ - platforms
+ - tags
+ - sites
+ - device_types

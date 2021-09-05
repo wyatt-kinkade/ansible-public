@@ -1,0 +1,21 @@
+---
+collections:
+
+  - name: ansible.netcommon
+    source: https://galaxy.ansible.com
+    version: 1.5.0
+
+  - name: community.general
+    source: https://galaxy.ansible.com
+
+  - name: community.kubernetes
+    source: https://galaxy.ansible.com
+
+  - name: google.cloud
+    source: https://galaxy.ansible.com
+
+  - name: netbox.netbox
+    source: https://galaxy.ansible.com
+    version: 2.1.0
+
+#With new AWX this all doesn't matter, go to https://hub.docker.com/r/wyattkinkade/ansible-custom-ee have fun with that EE
