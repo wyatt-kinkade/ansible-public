@@ -1,0 +1,442 @@
+---
+#To be entirely candid this is old and not my finest quality stuff, but it's a good example of a few things, I might end up doing a more proper rewrite, but I'm not in a rush to "fix" a working playbook
+#So to whomever reads this, the goal of this was to configure a policy based vpn tunnel and provide information to a customer, so that ought to help explain some of the phrasing of the email
+- name: 1 Side Tunnel Configuration
+  hosts: "{{ selected_device }}"
+  gather_facts: false
+  vars:
+    nat_last_octet: []
+    nat_origin: []
+    nat_mask: []
+    local_nat_last_octet: []
+    local_nat_origin: []
+    local_nat_mask: []
+    remote_nat_needed: false
+    nat_third_octet: 'n/a'
+    pwd_alias: "{{ lookup('password', '/dev/null length=30 chars=ascii_letters,digits,./!@#$%^&*-_=+,,') }}"
+  vars_files:
+    - "{{playbook_dir}}/../variables/tunnel_vars.yaml"
+    - "{{playbook_dir}}/../inventory/secrets/admin.yml"
+
+  tasks:
+#If the intent is to use a static variable file rather than an AWX survey then a ton of this can just go away
+    - name: Set Initial Variables
+      set_fact:
+        is_production: "{{ is_production.lower() | regex_replace('^[Yy]$', 'yes') | bool }}"
+        local_nat_needed: "{{ local_nat_needed.lower() | regex_replace('^[Yy]$', 'yes') | bool }}"
+        pfs: "{{ local_nat_needed.lower() | regex_replace('^[Yy]$', 'yes') | bool }}"
+        static: "{{ local_nat_needed.lower() | regex_replace('^[Yy]$', 'yes') | bool }}"
+        caps_name: "{{ site_name.replace(' ', '-').upper() }}"
+        p1_lifetime: "{{ p1_lifetime | string }}"
+        p2_lifetime: "{{ p2_lifetime | string }}"
+        remote_object: "{{ remote_object_string.replace(' ','').split(',') }}"
+        local_object: "{{ local_object_string.replace(' ','').split(',') }}"
+
+    - name: Determine Device IP
+      asa_command:
+        commands:
+          - show ip address outside
+      register: asa_ip_lookup_raw
+      when: not ( inventory_hostname | ipaddr )
+      
+    - name: Set Initial Variables
+      set_fact:
+        asa_peer_value: "{{ asa_ip_lookup_raw.stdout_lines[-1][-1].split()[2] }}"
+      when: not ( inventory_hostname | ipaddr )
+
+#Safety Checks, I've built a lot of these into AWX by limiting survey options, perhaps that's not the best, but I can't really mess it up in that case...
+#I might add in some, I know I never needed them, but it'd be a fair courtesy
+
+    - name: Create List of IPs in configuration of ASA matching the first 3 octets of the VPN tunnel
+      asa_command:
+        commands:
+          - show run | i {{ item.split('.')[:-1] | join('.') + '.' }}
+      with_items: "{{ remote_object }}"
+      register: remote_nat_checker
+
+    - name: Set remote_nat_needed variable to true if applicable
+      set_fact:
+        remote_nat_needed: true
+      when: 
+        - remote_nat_checker.results[0].stdout != [""]
+
+#OBJECTS/ACLs/NATs
+
+    - name: Create List of Final Octets, Remote Addresses and Subnet Masks
+      set_fact:
+        nat_origin: "{{ nat_origin }} + [ '{{ item }}' ]"
+        nat_last_octet: "{{ nat_last_octet }} + [ '{{ item.split('.')[3].split('/')[0] }}' ]"
+        nat_mask: "{{ nat_mask }} + [ '{{ item | ipaddr('prefix') }}' ]"
+      with_items: "{{ remote_object }}"
+
+#I'll eventually update these to use loop, this is my first really "production" playbook, I'm not one to rush to fix this yet, FQCN's will be a higher priority
+    - name: LISTS2DICTSREMOTE
+      set_fact:
+        nat_object: "{{ nat_object|default([]) + [ {'nat_oct': item.0, 'nat_msk': item.1, 'nat_orig': item.2 } ] }}"
+      with_together:
+        - "{{ nat_last_octet }}"
+        - "{{ nat_mask }}"
+        - "{{ nat_origin }}"
+
+    - name: Create List of Final Octets, Local Addresses and Subnet Masks
+      set_fact:
+        local_nat_origin: "{{ local_nat_origin }} + [ '{{ item }}' ]"
+        local_nat_last_octet: "{{ local_nat_last_octet }} + [ '{{ item.split('.')[3].split('/')[0] }}' ]"
+        local_nat_mask: "{{ local_nat_mask }} + [ '{{ item | ipaddr('prefix') }}' ]"
+      with_items: "{{ local_object }}"
+
+    - name: LISTS2DICTSLOCAL
+      set_fact:
+        local_nat_object: "{{ local_nat_object|default([]) + [ {'loc_nat_oct': item.0, 'loc_nat_msk': item.1, 'loc_nat_orig': item.2} ] }}"
+      with_together:
+        - "{{ local_nat_last_octet }}"
+        - "{{ local_nat_mask }}"
+        - "{{ local_nat_origin }}"
+
+#Gather List of Objects and a List of Object Groups
+    - name: Parse using module
+      ansible.netcommon.cli_parse:
+        command: show object-group network
+        parser:
+          name: ansible.netcommon.ntc_templates
+          command: show object-group network
+      when: local_nat_needed | bool or remote_nat_needed | bool
+      register: parsed_ogs
+
+    - name: Parse using module
+      ansible.netcommon.cli_parse:
+        command: show run object network
+        parser:
+          name: ansible.netcommon.ntc_templates
+          command: show running-config object network
+      when: local_nat_needed | bool or remote_nat_needed | bool
+      register: parsed_objects
+
+    - name: Seperate Parsed Object Groups 
+      set_fact:
+        all_object_groups: "{{ parsed_ogs.parsed }}"
+      when: 
+        - local_nat_needed | bool or remote_nat_needed | bool
+        - parsed_ogs is defined
+
+    - name: Seperate Parsed Objects
+      set_fact:
+        all_objects: "{{ parsed_objects.parsed }}"
+      when: 
+        - local_nat_needed | bool or remote_nat_needed | bool
+        - parsed_ogs is defined
+
+#If you notice below the to_json | from_json that is to counteract a bug from older versions of Ansible 
+    - name: Filter out host objects that match 10.207.x.x
+      set_fact:
+        object_groups_207: "{{ all_object_groups | to_json | from_json | json_query(nat_object_query) }}"
+        objects_207: "{{ all_objects | to_json | from_json | json_query(nat_object_query) }}"
+      when: local_nat_needed | bool or remote_nat_needed | bool
+      vars:
+        nat_object_query: "[?host.contains(@, '10.207.')].host"
+
+    - name: Filter out network objects that match 10.207.x.x
+      set_fact:
+        object_groups_net_207: "{{ all_object_groups | to_json | from_json | json_query(nat_object_query) }}"
+        objects_net_207: "{{ all_objects | to_json | from_json | json_query(nat_object_query) }}"
+      when: local_nat_needed | bool or remote_nat_needed | bool
+      vars:
+        nat_object_query: "[?network.contains(@, '10.207.')].network"
+
+    - name: Merge List of Matching Objects and Objects within Object Groups
+      set_fact:
+        all_207_objects: "{{ object_groups_207 + objects_207 + object_groups_net_207 + objects_net_207 }}"
+      when: local_nat_needed | bool or remote_nat_needed | bool
+
+    - name: Sort List of 10.207.x.x IPs
+      set_fact:
+        all_207_objects_sorted: "{{ all_207_objects | ipaddr('int') | sort | ipaddr }}"
+      when: 
+        - local_nat_needed | bool or remote_nat_needed | bool
+        - all_207_objects is defined
+        - all_207_objects | length
+
+    - name: Sort List of 10.207.x.x IPs
+      set_fact:
+        all_207_objects_sorted: ["10.207.0.0"]
+      when: 
+        - local_nat_needed | bool or remote_nat_needed | bool
+        - all_207_objects is defined
+        - not all_207_objects | length
+
+    - name: Set Third Octet Variable for NATing
+      set_fact:
+        nat_third_octet: "{{ all_207_objects_sorted[-1].split('.')[2] }}"
+      when: local_nat_needed | bool or remote_nat_needed | bool
+
+    - name: "Fail at End of 10.207.0.0/16"
+      fail:
+        msg: "Sorry, All out of IPs, adjust the playbook to use 10.208"
+      when: 
+        - nat_third_octet == "254"
+        - local_nat_needed | bool or remote_nat_needed | bool
+
+    - name: Get last used cryptomap sequence and gather all ipsec policies
+      asa_command:
+        commands:
+          - show run cry map | i interface
+      register: asa_vars
+
+## CRYPTO DETAILS / PSKs
+
+#Crypto Map Basics
+    - name: Set Active Crypto Map Name
+      set_fact:
+        map_name: "{{ asa_vars.stdout_lines[0][-1].split()[2] }}"
+      when: asa_vars.stdout[0] != ""
+
+    - name: Set Active Crypto Map Name
+      set_fact:
+        map_name: "vpnmap"
+      when: asa_vars.stdout[0] == ""
+
+#Why make it so complicated, because unnamed previous network administrators may have configured crypto maps that simpler logic might get caught and mangled up by
+    - name: Get last used cryptomap sequence and gather all ipsec policies
+      asa_command:
+        commands:
+          - show run cry map | i {{map_name}}
+      register: asa_vars1
+
+    - name: Sort only Match Statements
+      set_fact:
+        active_cry_map_matches: "{{ asa_vars1.stdout_lines[0] | to_json | from_json | json_query(matches_only) }}"
+      when: 
+        - asa_vars1.stdout[0] != ""
+      vars:
+        matches_only: "[?contains(@, 'match')]"
+
+    - name: Set Next Crypto Map Number to Use
+      set_fact:
+        map_id: "{{ active_cry_map_matches[-1].split()[3]|int + 1 }}"
+      when: 
+        - asa_vars1.stdout[0] != ""
+
+    - name: Set Next Crypto Map Number to Use
+      set_fact:
+        map_id: "10"
+      when: 
+        - asa_vars1.stdout[0] == ""
+
+# Dynamic Cryptographic Mapping Settings
+
+    - name: Get last used cryptomap sequence and gather all ipsec policies
+      asa_command:
+        commands:
+          - show run cry map | i ipsec-isakmp dynamic
+      register: list_applied_dyn_map
+      when: not static | bool
+
+    - name: Set Dynamic Map Name
+      set_fact:
+        dyn_map_name: "{{ list_applied_dyn_map.stdout_lines[0][0].split()[-1] }}"
+      when: 
+        - not static | bool
+        - list_applied_dyn_map.stdout[0] != ""
+
+    - name: Set Dynamic Map Name
+      set_fact:
+        dyn_map_name: "dyn-map"
+      when: 
+        - not static | bool
+        - list_applied_dyn_map.stdout[0] == ""
+
+    - name: Get list of entries in a Dynamic Map
+      asa_command:
+        commands:
+          - show run dynamic-map | i {{ dyn_map_name }}
+      register: working_dyn_map
+      when: not static | bool
+
+    - name: Set Active Dynamic Map Seq Number
+      set_fact:
+        dyn_map_id: "{{ working_dyn_map.stdout_lines[0][-1].split()[3]|int + 1 }}"
+      when: 
+        - not static | bool
+        - working_dyn_map.stdout[0] != ""
+
+    - name: Set Active Dynamic Map Name
+      set_fact:
+        dyn_map_id: " 1 "
+      when: 
+        - not static | bool
+        - working_dyn_map.stdout[0] == ""
+
+    - name: Check Default L2L Tunnel-Group
+      asa_command:
+        commands:
+          - more system:running-config | b tunnel-group DefaultL2LGroup 
+      register: defaultl2lchk
+      when: not static | bool
+
+    - name: Set Variable
+      set_fact:
+        default_l2l_group: "{{ defaultl2lchk.stdout_lines[0][0] }}"
+      when: 
+        - not static | bool
+
+    - name: Set PSK of Existing Static Hosts
+      set_fact:
+        psk: "{{ defaultl2lchk.stdout_lines[0][1].split()[2] }}"
+      when: 
+        - not static | bool
+        - default_l2l_group != ""
+
+#PSKs
+
+    - name: Set PSK Variable
+      set_fact:
+        psk: "{{ pwd_alias }}"
+      when: static | bool or default_l2l_group == ""
+
+#IKE
+
+    - name: Get ikev1 configuration details, If Applicable
+      asa_command:
+        commands:
+          - show run cry ikev1
+      register: ikev1_info
+      when: ike_version == "1"
+
+    - name: Get ikev2 configuration details, If Applicable
+      asa_command:
+        commands:
+          - show run cry ikev2
+      register: ikev2_info
+      when: ike_version == "2"
+
+    - name: Phase 1 Crypto Map Variable Generator
+      include_tasks: "{{playbook_dir}}/child_playbooks/ikev1-info.yml"
+      when: ike_version == "1"
+
+    - name: Phase 1 Crypto Map Variable Generator
+      include_tasks: "{{playbook_dir}}/child_playbooks/ikev2-info.yml"
+      when: ike_version == "2"
+
+    - name: Phase 1 Crypto Map Variable Generator
+      include_tasks: "{{playbook_dir}}/child_playbooks/p1-hash-renamer.yml"
+
+    - name: Dynamically Configure Filters for below
+      set_fact:
+        jmesquery_ike_auth: "[?auth_algorithm==`{{p1_hash_algo.lower()}}`]"
+        jmesquery_ike_encrypt: "[?encryption==`{{p1_encrypt_algo.lower()}}`]"
+        jmesquery_ike_dh: "[?dh_group==`group {{p1_dh}}`]"
+        jmesquery_ike_list: "[*].policy_id"
+
+    - name: Filter Dictionaries by Hash Algo
+      set_fact:
+        p1_hash_filtered: "{{ ike_dict | json_query(jmesquery_ike_auth) }}"
+
+    - name: Filter Dictionaries by Encryption Algo
+      set_fact:
+        p1_hash_encrypt_filtered: "{{ p1_hash_filtered | json_query(jmesquery_ike_encrypt) }}"
+
+    - name: Filter Dictionaries by Diffie Hellman Group
+      set_fact:
+        p1_hash_full_filtered: "{{ p1_hash_encrypt_filtered | json_query(jmesquery_ike_dh) }}"
+
+    - name: Put Policy IDs in List instead of a list of Dictionaries
+      include_tasks: "{{playbook_dir}}/child_playbooks/missing_p1_cry_pol.yml"
+      when: 
+        - not p1_hash_full_filtered|length>0
+        - ike_dict|length>0
+
+    - name: Set value to that of the next defined policy
+      include_tasks: "{{playbook_dir}}/child_playbooks/no_p1_cry_pol.yml"
+      when: 
+        - not p1_hash_full_filtered|length>0
+        - not ike_dict|length>0
+
+###IPSEC
+
+    - name: Parse using module
+      ansible.netcommon.cli_parse:
+        command: show running-config ipsec
+        parser:
+          name: ansible.netcommon.ntc_templates
+          command: show running-config ipsec
+      register: parsed_ipsec
+
+    - name: Parse show run icry ikev2 Output to JSON
+      set_fact:
+        ike_dict: "{{ parsed_ipsec.parsed }}"
+      when: parsed_ipsec != ""
+
+    - name: Phase 2 Crypto Map Variable Generator
+      include_tasks: "{{playbook_dir}}/child_playbooks/p2-hash-renamer.yml"
+
+    - name: Configure Filters for below
+      set_fact:
+        jmesquery_ipsec_auth: "[?AUTH==`{{p2_hash_algo.lower()}}`]"
+        jmesquery_ipsec_encrypt: "[?ENCRYPTION==`{{p2_encrypt_algo.lower()}}`]"
+        jmesquery_ipsec_list: "[*].NAME"
+      when: parsed_ipsec != ""
+
+    - name: Filter Dictionaries by Hash Algo
+      set_fact:
+        hash_filtered: "{{ ipsec_dict | json_query(jmesquery_ipsec_auth) }}"
+      when: parsed_ipsec != ""
+
+    - name: Filter Dictionaries by Encryption Algo
+      set_fact:
+        hash_encrypt_filtered: "{{ hash_filtered | json_query(jmesquery_ipsec_encrypt) }}"
+      when: parsed_ipsec != ""
+
+    - name: List IPsec Proposal/Transform Set Names
+      set_fact:
+        filtered_name_list: "{{ hash_encrypt_filtered | json_query(jmesquery_ipsec_list) }}"
+      when: 
+        - hash_encrypt_filtered is defined
+        - hash_encrypt_filtered != [] 
+        - hash_encrypt_filtered != "" 
+
+    - name: List Names
+      set_fact:
+        active_crypto_policy: "{{ filtered_name_list[0] }}"
+      when: 
+        - hash_encrypt_filtered is defined
+        - hash_encrypt_filtered != [] 
+        - hash_encrypt_filtered != "" 
+
+      # Needs to be run before OTS
+    - name: Apply VPN Template
+      asa_config:
+        src: '{{playbook_dir}}/../templates/ipsec-vpn-1side/new-raw-config.j2'
+        replace: line
+        backup: yes
+      when: is_production | bool
+
+    - name: Send PSK to OneTimeSecret
+      uri:
+        url: https://onetimesecret.com/api/v1/share
+        url_password: "{{ots_key}}"
+        url_username: "{{ots_user}}"
+        method: POST
+        force_basic_auth: yes
+        body_format: form-urlencoded
+        body:
+          secret: "{{ psk }}"
+      delegate_to: localhost
+      register: results
+      
+    - name: Set Keys for Secret and for viewing link
+      set_fact:
+        secret_key: "{{ results.json.secret_key }}"
+        metadata_key: "{{ results.json.metadata_key }}"
+
+    - name: Mail Alerts
+      mail:
+        host: "{{ mail_srv }}"
+        port: 587
+        username: "{{ alerts_mail_acct }}"
+        password: "{{ alerts_mail_pw }}"
+        to: "{{ to_address }}"
+        from: "{{ alerts_mail_acct }}"
+        subtype: html
+        subject: "{{ site_name }} VPN Config Details"
+        body: "{{ lookup('template', '{{playbook_dir}}/../templates/ipsec-vpn-1side/TUN-INFO-IPSEC-Message-Template.j2') }}"
+      delegate_to: localhost

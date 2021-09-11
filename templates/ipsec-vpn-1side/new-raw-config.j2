@@ -1,0 +1,21 @@
+{# I've moved the HTML Lines to the email, it merely seems more appropriate there... #}
+{# Create Object Groups, ACLs, and NATs #}
+{% include "object-acl-nat-gen.j2" %}
+{#Create Phase 1 Crypto Configuration if needed#}
+{% if p1_next_ike_policy_num is defined %}
+{% include "ike-cry-gen.j2" %}
+{% endif %}
+
+{#Create Phase 2 Crypto Configuration and Crypto Map if needed#}
+{% if active_crypto_policy is not defined %}
+{% include "ipsec-cry-map-gen.j2" %}
+{% endif %}
+
+{#Create Phase 2 Crypto Configuration and Crypto Map if needed#}
+{% if active_crypto_policy is defined %}
+{% include "cry-map-gen.j2" %}
+{% endif %}
+
+!
+{# Generate their tunnel-group #}
+{% include "tunnel-group-gen.j2" %}

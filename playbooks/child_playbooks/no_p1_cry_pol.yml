@@ -1,0 +1,3 @@
+- name: Set value to that of the next defined policy
+  set_fact:
+    p1_next_ike_policy_num: "10"

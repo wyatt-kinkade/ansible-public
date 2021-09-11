@@ -1,0 +1,71 @@
+---
+##HASHING
+#SHA 1 
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_hash_algo: "sha"
+  when: hash_algo.lower() == "sha"
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_hash_algo: "sha"
+  when: hash_algo.lower() == "sha-1"
+  #P2 Specific Hash Algos, I still need to pass the variables
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_hash_algo: "sha256"
+  when: 
+    - ike_version == "2" 
+    - hash_algo.lower() == "sha-256"
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_hash_algo: "sha384" 
+  when: 
+    - ike_version == "2" 
+    - hash_algo.lower() == "sha-384" 
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_hash_algo: "sha512"
+  when: 
+    - ike_version == "2" 
+    - hash_algo.lower() == "sha-512"
+#that's it for hashing, IKEv2 is sensible about this, but I need to change the variable in that case and add failure conditions for wrong configurations
+- name: "Fail job if Impossible Configuration"
+  fail:
+    msg: "IKEv1 only allows sha-1 and md5 hashing"
+  when: ike_version == "1" and hash_algo.lower() != "sha-1" and hash_algo.lower() != "sha" and hash_algo.lower() != "md5"
+- name: "My pride prevents me from using md5"
+  fail:
+    msg: "Use modern hashing algorithms, I don't care what the customer says"
+  when: hash_algo.lower() == "md5"
+
+
+##ENCRYPTION
+
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_encrypt_algo: "aes-256"
+  when: encrypt_algo.lower() == "aes-256"
+#Insta-Failure
+- name: "Your waifu is trash"
+  fail:
+    msg: "Use modern Encryption algorithms, I don't care what the customer says"
+  when: encrypt_algo.lower() == "des" or encrypt_algo.lower() == "3des" or encrypt_algo.lower() == "aes-192" or encrypt_algo.lower() == "aes"
+
+##DIFFIE HELLMAN GROUP
+- name: "Your waifu is trash"
+  fail:
+    msg: "Use modern Encryption algorithms, I don't care what the customer says"
+  when: dh_group == "1" or dh_group == "2"
+- name: "Your waifu is trash"
+  fail:
+    msg: "Use modern Encryption algorithms, I don't care what the customer says"
+  when: 
+    - dh_group == "14" or dh_group == "5" 
+    - ike_version == "2"
+- name: "IKEv1 Exception"
+  debug:
+    msg: "Use modern Encryption algorithms if possible, This is the best we can do for IKEv1"
+  when: ike_version == "2" and dh_group == "5"
+- name: compensate for inconsistent naming
+  set_fact:
+    p1_dh: "{{dh_group}}"

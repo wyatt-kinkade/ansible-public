@@ -1,0 +1,11 @@
+    - name: Parse using module
+      ansible.netcommon.cli_parse:
+        text: "{{ ikev2_info.stdout[0] }}"
+        parser:
+          name: ansible.netcommon.textfsm
+          template_path: "{{playbook_dir}}/ntc_templates/cisco_asa_show_running-config_crypto_ikev2.textfsm" 
+      register: parsed_ikev2
+    - name: Parse show run cry ikev2 Output to JSON
+      set_fact:
+        ike_dict: "{{ parsed_ikev2.parsed }}"
+      when: ikev2_info != "" and ike_version == "2"

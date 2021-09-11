@@ -1,0 +1,31 @@
+---
+#local_device_name: HOME
+#site_name: NEET Industrial
+#contact: Walt
+# NEW RECCOMENDATION IKEv2
+#ike_version: "1"
+### Phase 1 and 2 values are just for the email to the customer, these don't do squat since we configure tunnels to be the same almost always, 
+### these values are almost always the same between parent and child SAs 
+# Reccomended IKEv1 "5" IKEv2 "21"
+#dh_group: "5"
+# Reccomended IKEv1 and IKEv2 "AES-256"
+#encrypt_algo: "AES-256"
+# Reccomended IKEv1 "SHA-1" IKEv2 "SHA-256"
+#hash_algo: "SHA-1"
+# Reccomended in all cases to be "86400" (24 hrs) especially since this is how it is set for all ikev2 sessions and most ikev1 policies, we don't REALLY set this tbh
+#p1_lifetime: "86400"
+# Reccomended IKEv1 "28800" (8 hrs) IKEv2 "3600" (1 hr)
+#p2_lifetime: "28800"
+# Reccomended false with IKEv1, true with IKEv2, pfs is a wierd little thing, nice to have, but nonetheless wierd
+#pfs: true
+#local_nat_needed: true
+#static: true
+#remote_object:
+#  - "192.168.0.5/32"
+#local_object:
+#  - "192.168.0.4/32"
+
+#peer_address: 6.6.6.0
+
+# REPLACE THIS WITH SURVEY IF USED WITH TOWER
+

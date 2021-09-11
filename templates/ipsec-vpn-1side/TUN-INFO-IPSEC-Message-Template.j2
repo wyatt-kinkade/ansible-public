@@ -1,0 +1,108 @@
+<p>{{ contact }},</p>
+Below is the configuration information for the tunnel between the local end of this tunnel and {{ site_name }}.<br>
+<br>
+Phase one and two settings, peer addresses, and host addresses.{% if remote_nat_needed %} Additionally this requires NAT to be performed on traffic crossing the tunnel from your end.{% endif %}{% if not static %}The PSK for IKEv1, IKEv2 Local and IKEv2 Remote are all the same and will be shared among all Dynamic Peers{% endif %}</p>
+
+<p><strong>Local Peer:</strong>
+<ul style="list-style-type:none">
+<li>{% if inventory_hostname|ipv4 %}{{ inventory_hostname }}{% else %}{{asa_peer_value}}{% endif %}</li>
+</ul>
+
+<p><strong>{{ site_name }} Peer:</strong>
+<ul style="list-style-type:none">
+  <li>{% if static %}{{ peer_address }}{% else %}Dynamic Peer{% endif %}</li>
+</ul>
+
+<p><strong>Local Hosts:</strong>
+<ul style="list-style-type:none">
+{# Iterate through local hosts assigned to the customer #}
+{%   if local_nat_needed %} {# OUTSIDE NEST#}
+{% for host in local_nat_object %} {# OBJECT LOOP #}
+{%  if remote_nat_needed %}
+  <li>10.207.{{ nat_third_octet|int +2 }}.{{ host.loc_nat_oct }}/{{ host.loc_nat_msk }}</li>
+{%  else %}
+  <li>10.207.{{ nat_third_octet|int +1 }}.{{ host.loc_nat_oct }}/{{ host.loc_nat_msk }}</li>
+{%  endif %}
+{% endfor %}
+{%   else %}{# OUTSIDE NEST#}
+{% for host in local_object %} {# OBJECT LOOP #}
+  <li>{{ host }}</li>
+{% endfor %}
+{%   endif %}{# OUTSIDE NEST#}
+</ul>
+</p>
+
+<p><strong>{{ site_name }} Host(s):</strong><br>
+<ul style="list-style-type:none">
+{# Iterate through the customer's hosts #}
+{% if remote_nat_needed %}
+{% for item in nat_object %}
+  <li>{{ item.nat_orig }} ==> 10.207.{{ nat_third_octet|int +1 }}.{{ item.nat_oct }}/{{ item.nat_msk }} </li>
+{% endfor %}
+{% else %}
+{% for host in remote_object %}
+  <li>{{ host }}</li>
+{% endfor %}
+{% endif %}
+</ul>
+</p>
+
+{# Display Peering information based on ipsec version#}
+{% if ike_version == "1" %}
+<p><strong>Phase 1:</strong>
+<ul style="list-style-type:none">
+  <li>IKEv1 Encryption: {{ encrypt_algo }}</li>
+  <li>IKEv1 Data integrity: {{ hash_algo }} </li>
+  <li>IKEv1 DH group: {{ dh_group }}</li>
+  <li>Lifetime: {{ p1_lifetime }} seconds</li>
+</ul>
+</p>
+
+<p><strong>Phase 2:</strong>
+<ul style="list-style-type:none">
+  <li>IPSEC Encryption: {{ encrypt_algo }}</li>
+  <li>IPSEC Data Integrity: {{ hash_algo }}</li>
+  <li>Lifetime: {{ p2_lifetime }} seconds</li>
+{%  if pfs|bool %}
+  <li>Perfect Forward Secrecy: {{ dh_group }}</li>
+{%  else %}
+  <li>Perfect Forward Secrecy: Disabled</li>
+{%  endif %}
+</ul>
+</p>
+
+{% elif ike_version == "2" %}
+<p><strong>Phase 1:</strong>
+<ul style="list-style-type:none">
+  <li>IKEv2 Encryption: {{ encrypt_algo }}</li>
+  <li>IKEv2 Data integrity: {{ hash_algo }}</li>
+  <li>IKEv2 DH groups: {{ dh_group }}</li>
+  <li>Lifetime: {{ p1_lifetime }} seconds</li>
+</ul>
+</p>
+
+<p><strong>Phase 2:</strong>
+<ul style="list-style-type:none">
+  <li>IPSEC Encryption: {{ encrypt_algo }}</li>
+  <li>IPSEC Data Integrity: {{ hash_algo }}</li>
+  <li>Lifetime: {{ p2_lifetime }}</li>
+{%  if pfs|bool %}
+  <li>Perfect Forward Secrecy: Group {{ dh_group }}</li>
+{%  else %}
+  <li>Perfect Forward Secrecy: Disabled</li>
+{%  endif %}
+</ul>
+</p>
+{% endif %}
+
+<p>Below is a copy of the raw configuration on our end of the tunnel.<br>
+<strong>==========================================================</strong></p>
+<pre><code style="font-family: 'Courier New', Courier, monospace; font-size:0.8em">
+{% include "new-raw-config.j2" %}
+</code></pre>
+<p><strong>==========================================================</strong></p>
+
+<p>The following is the PSK behind a self-destructing one time secret link.</p>
+<p><strong>PSK:</strong> <a href="https://onetimesecret.com/secret/{{ secret_key }}">https://onetimesecret.com/secret/{{ secret_key }}</a></p>
+
+<p>Let us know If you have any issues with configuration or passing traffic.</p>

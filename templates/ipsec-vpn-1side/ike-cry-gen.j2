@@ -1,0 +1,24 @@
+{# IKEv1 Policy Generation #}
+{% if ike_version == "1" %}
+{%  if p1_last_ike_policy_num is not defined  %}
+crypto ikev1 enable outside
+crypto ikev1 am-disable
+{%  endif  %}
+crypto ikev1 policy {{ p1_next_ike_policy_num }}
+ authentication pre-share
+ encryption {{p1_encrypt_algo.lower()}}
+ hash {{p1_hash_algo.lower()}}
+ group {{p1_dh}}
+ lifetime {{p1_lifetime}}
+{# IKEv2 Policy Generation #}
+{% elif ike_version == "2" %}
+{%  if p1_last_ike_policy_num is not defined  %}
+crypto ikev2 enable outside
+{%  endif  %}
+crypto ikev2 policy {{ p1_next_ike_policy_num }}
+ encryption {{p1_encrypt_algo.lower()}}
+ integrity {{p1_hash_algo.lower()}}
+ group {{p1_dh}}
+ prf {{p1_hash_algo.lower()}}
+ lifetime seconds {{p1_lifetime}}
+{% endif %}

@@ -1,0 +1,11 @@
+    - name: Put Policy IDs in List instead of a list of Dictionaries
+      set_fact:
+        p1_full_policy_num_list: "{{ ike_dict | json_query(jmesquery_ike_list) }}"
+
+    - name: Set value to that of the last defined policy
+      set_fact:
+        p1_last_ike_policy_num: "{{ p1_full_policy_num_list[-1] }}"
+
+    - name: Set value to that of the next defined policy
+      set_fact:
+        p1_next_ike_policy_num: "{{ p1_last_ike_policy_num | int + 10 }}"

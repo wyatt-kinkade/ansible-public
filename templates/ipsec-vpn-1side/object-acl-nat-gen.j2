@@ -1,0 +1,60 @@
+{# Create the object group for Local Rubber Tree hosts #}
+object-group network {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }}
+{% for host in local_object %}
+{% if host | ipaddr('prefix') | int != 32 %}
+  network-object {{ host | ipaddr('network') }} {{ host | ipaddr('netmask') }}
+{%  else %}
+  network-object host {{ host | ipaddr('address') }}
+{%  endif %}
+{% endfor %}
+!
+{# Create an object group representing the locally natted rubber tree hosts if needed #}
+{% if local_nat_needed %}
+object-group network {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }}-NAT
+{%  for host in local_nat_object %}
+{%   if host.loc_nat_orig | ipaddr('prefix') | int != 32 %}
+{%    if remote_nat_needed %}
+  network-object 10.207.{{ nat_third_octet|int +2 }}.{{ host.loc_nat_oct }} {{ host.loc_nat_orig | ipaddr('netmask') }}
+{%    else %}
+  network-object 10.207.{{ nat_third_octet|int +1 }}.{{ host.loc_nat_oct }} {{ host.loc_nat_orig | ipaddr('netmask') }}
+{%    endif %}
+{%   else %}
+{%    if remote_nat_needed %}
+  network-object host 10.207.{{ nat_third_octet|int +2 }}.{{ host.loc_nat_oct }} 
+{%    else %}
+  network-object host 10.207.{{ nat_third_octet|int +1 }}.{{ host.loc_nat_oct }} 
+{%    endif %}
+{%   endif %}
+{%  endfor %}
+!
+{% endif %}
+{# Create the object group representing the customer's p21 hosts #}
+object-group network {{ site_name.replace(' ', '-').upper() }}
+{% if remote_nat_needed %}
+{%  for host in nat_object %}
+{%   if host.nat_orig | ipaddr('prefix') | int != 32 %}
+  network-object 10.207.{{ nat_third_octet|int +1 }}.{{ host.nat_oct }} {{ host.nat_orig | ipaddr('netmask') }}
+{%   else %}
+  network-object host 10.207.{{ nat_third_octet|int +1 }}.{{ host.nat_oct }}
+{%   endif %}
+{%  endfor %}
+{% else %}
+{%  for host in remote_object %}
+{%   if host | ipaddr('prefix') | int != 32 %}
+  network-object {{ host | ipaddr('network') }} {{ host | ipaddr('netmask') }}
+{%   else %}
+  network-object host {{ host | ipaddr('address') }}
+{%   endif %}
+{%  endfor %}
+{% endif %}
+!
+{% if local_nat_needed %} {# Create an access list and NAT mapping for the customer #}
+access-list {{ site_name.replace(' ', '-').upper() }}-ACL extended permit ip object-group {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }}-NAT object-group {{ site_name.replace(' ', '-').upper() }}
+!
+nat (inside,outside) source static {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }} {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }}-NAT destination static {{ site_name.replace(' ', '-').upper() }} {{ site_name.replace(' ', '-').upper() }} no-proxy-arp
+{% else %} {# Create an access list for the customer #}
+access-list {{ site_name.replace(' ', '-').upper() }}-ACL extended permit ip object-group {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }} object-group {{ site_name.replace(' ', '-').upper() }}
+!
+nat (inside,outside) source static {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }} {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }} destination static {{ site_name.replace(' ', '-').upper() }} {{ site_name.replace(' ', '-').upper() }} no-proxy-arp
+!
+{% endif %}

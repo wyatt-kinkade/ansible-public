@@ -1,0 +1,42 @@
+{# IPsec Transform Set Generation #}
+{% if ike_version == "1" %}
+crypto ipsec ikev1 transform-set ESP-{{ encrypt_algo.upper() }}-{{ hash_algo.upper() }} {{p2_encrypt_algo}} {{p2_hash_algo}}
+{% endif %}
+{# IPsec Proposal Generation #}
+{% if ike_version == "2" %}
+crypto ipsec ikev2 ipsec-proposal {{ encrypt_algo.upper() }}-{{ hash_algo.upper() }}
+ protocol esp encryption {{p2_encrypt_algo}}
+ protocol esp integrity {{p2_hash_algo}}
+{% endif %}
+
+{% if map_id|int < 11 %}
+crypto map {{ map_name }} interface outside
+{% endif %}
+{# Generate their cryptomap #}
+{%  if static  %}
+crypto map {{ map_name }} {{ map_id }} match address {{ site_name.replace(' ', '-').upper() }}-ACL
+crypto map {{ map_name }} {{ map_id }} set peer {{ peer_address }}
+{% if pfs|bool %}
+crypto map {{ map_name }} {{ map_id }} set pfs group{{ dh_group }}
+{% endif %}
+{% if ike_version == "1" %}
+{#Nobody should use agressive mode, we need to discourage it so we can disable it if possible, removing that from the config#}
+crypto map {{ map_name }} {{ map_id }} set ikev1 transform-set ESP-{{ encrypt_algo.upper() }}-{{ hash_algo.upper() }}
+{% elif ike_version == "2" %}
+crypto map {{ map_name }} {{ map_id }} set ikev2 ipsec-proposal {{ encrypt_algo.upper() }}-{{ hash_algo.upper() }}
+{% endif %}
+crypto map {{ map_name }} {{ map_id }} set security-association lifetime seconds {{ p2_lifetime }}
+{%  else  %}
+crypto dynamic-map {{ dyn_map_name }} {{ dyn_map_id }} match address {{ site_name.replace(' ', '-').upper() }}-ACL
+{% if ike_version == "1" %}
+{#Nobody should use agressive mode, we need to discourage it so we can disable it if possible, removing that from the config#}
+crypto dynamic-map {{ dyn_map_name }} {{ dyn_map_id }} set ikev1 transform-set ESP-{{ encrypt_algo.upper() }}-{{ hash_algo.upper() }}
+{% elif ike_version == "2" %}
+crypto dynamic-map {{ dyn_map_name }} {{ dyn_map_id }} set ikev2 ipsec-proposal {{ encrypt_algo.upper() }}-{{ hash_algo.upper() }} 
+{% endif %}
+crypto dynamic-map {{ dyn_map_name }} {{ dyn_map_id }} set security-association lifetime seconds 28800
+crypto dynamic-map {{ dyn_map_name }} {{ dyn_map_id }} set security-association lifetime kilobytes 4608000
+{%   if list_applied_dyn_map is not defined   %}
+crypto map  {{ map_name }} 65535 ipsec-isakmp dynamic {{ dyn_map_name }}
+{%   endif   %}
+{%  endif  %}

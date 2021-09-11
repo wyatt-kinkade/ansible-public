@@ -1,0 +1,25 @@
+{# Create Tunnel Group, Define PSK, and Define Group Policy if Needed#}
+{%  if static  %}
+tunnel-group {{ peer_address }} type ipsec-l2l
+tunnel-group {{ peer_address }} ipsec-attributes
+{% if ike_version == "1" %}
+  ikev1 pre-shared-key {% if secret_key is defined %}********{% else %}{{ psk }}{% endif %}
+{% elif ike_version == "2" %}
+  ikev2 remote-authentication pre-shared-key {%  if secret_key is defined %}********{% else %}{{ psk }}{% endif %}
+  
+  ikev2 local-authentication pre-shared-key {%  if secret_key is defined %}********{% else %}{{ psk }}{% endif %}
+
+tunnel-group {{ peer_address }} general-attributes
+
+  default-group-policy GroupPolicyIKEv2
+{% endif %}
+{%  else  %}
+{%   if default_l2l_group == ""   %}
+tunnel-group DefaultL2LGroup ipsec-attributes
+  ikev1 pre-shared-key {% if secret_key is defined %}********{% else %}{{ psk }}{% endif %}
+
+  ikev2 remote-authentication pre-shared-key {%  if secret_key is defined %}********{% else %}{{ psk }}{% endif %}
+  
+  ikev2 local-authentication pre-shared-key {%  if secret_key is defined %}********{% else %}{{ psk }}{% endif %}
+{%   endif   %}
+{%  endif  %}

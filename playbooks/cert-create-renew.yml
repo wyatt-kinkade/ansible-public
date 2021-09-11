@@ -1,0 +1,139 @@
+---
+- hosts: "{{ linux_vm }}"
+  gather_facts: yes
+  vars_files:
+  - ../inventory/secrets/admin.yml
+  - ../inventory/secrets/systems.yml
+
+  tasks:
+    - name: Update pip for CentOS/RHEL 7 Devices
+      pip:
+        name: pip<19.2
+      when: ansible_facts['distribution'] == "CentOS" and ansible_facts['distribution_major_version'] == "7"
+
+    - name: Install/Update Cryptography Python Module on Endpoints
+      pip:
+        name: cryptography>1.3 
+      when: ansible_facts['distribution'] == "CentOS" and ansible_facts['distribution_major_version'] == "7"
+
+    - name: Generate an OpenSSL private key with the default values (4096 bits, RSA)
+      community.crypto.openssl_privatekey:
+        path: "/etc/ssl/private/{{ cn }}.pem"
+      become: true
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Generate an OpenSSL private key with the default values (4096 bits, RSA)
+      community.crypto.openssl_privatekey:
+        path: "/etc/pki/tls/private/{{ cn }}.pem"
+      become: true
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Generate CSR
+      community.crypto.openssl_csr:
+        path: "/etc/ssl/certs/{{ cn }}.csr"
+        privatekey_path: "/etc/ssl/private/{{ cn }}.pem"
+        country_name: "{{ country }}"
+        state_or_province_name: "{{ st }}"
+        organization_name: "{{ org }}"
+        email_address: "{{ mail }}"
+        common_name: "{{ cn }}"
+        use_common_name_for_san: yes
+      become: true
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Generate CSR
+      community.crypto.openssl_csr:
+        path: "/etc/pki/tls/certs/{{ cn }}.csr"
+        privatekey_path: "/etc/pki/tls/private/{{ cn }}.pem"
+        country_name: "{{ country }}"
+        state_or_province_name: "{{ st }}"
+        organization_name: "{{ org }}"
+        email_address: "{{ mail }}"
+        common_name: "{{ cn }}"
+        use_common_name_for_san: yes
+      become: true
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Copy CSR so it may be copied
+      ansible.builtin.copy:
+        remote_src: yes
+        src: "/etc/ssl/certs/{{ cn }}.csr"
+        dest: "/home/{{ lin_user }}/{{ cn }}.csr"
+        owner: "{{ lin_user }}"
+        group: "{{ lin_user }}"
+        mode: '0644'
+      become: true
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Copy CSR so it may be copied
+      ansible.builtin.copy:
+        remote_src: yes
+        src: "/etc/pki/tls/certs/{{ cn }}.csr"
+        dest: "/home/{{ lin_user }}/{{ cn }}.csr"
+        owner: "{{ lin_user }}"
+        group: "{{ lin_user }}"
+        mode: '0644'
+      become: true
+      when: ansible_facts['os_family'] == "RedHat"
+
+
+- hosts: "{{ windows_ca }}"
+  vars_files:
+  - ../inventory/secrets/admin.yml
+  - ../inventory/secrets/systems.yml
+
+  tasks:
+
+    - name: Copy CSR to Windows CA
+      ansible.windows.win_shell: scp.exe "{{ lin_user }}@{{ cn }}:~/{{ cn }}.csr" .\Desktop\CSR\
+      args:
+        executable: cmd
+
+    - name: Submit CSR to be Signed
+      ansible.windows.win_shell: certreq.exe -f -q -attrib "CertificateTemplate:WebServer" ".\Desktop\CSR\{{ cn }}.csr" ".\Desktop\CRT\{{ cn }}.crt"
+      args:
+        executable: cmd
+
+    - name: Send Root Certificate
+      ansible.windows.win_shell: scp.exe .\Documents\rooty.cer "{{ lin_user }}@{{ cn }}:~/rooty.cer"
+      args:
+        executable: cmd
+
+    - name: Send Signed Certificate
+      ansible.windows.win_shell: scp.exe ".\Desktop\CRT\{{ cn }}.crt" "{{ lin_user }}@{{ cn }}:~/{{ cn }}.crt"
+      args:
+        executable: cmd
+
+
+- hosts: "{{ linux_vm }}"
+  gather_facts: yes
+  vars_files:
+  - ../inventory/secrets/admin.yml
+  - ../inventory/secrets/systems.yml
+
+  tasks:
+
+    - name: Bundle Root and Signed Certificates
+      ansible.builtin.shell: cat ~/{{ cn }}.crt ~/rooty.cer > ~/bundle-{{ cn }}.crt
+
+    - name: Move Bundled Certificate
+      ansible.builtin.shell: mv /home/{{ lin_user }}/bundle-{{ cn }}.crt /etc/ssl/certs/{{ cn }}.crt
+      become: true
+      when: ansible_facts['os_family'] == "Debian"
+
+    - name: Move Bundled Certificate
+      ansible.builtin.shell: mv /home/{{ lin_user }}/bundle-{{ cn }}.crt /etc/pki/tls/certs/{{ cn }}.crt
+      become: true
+      when: ansible_facts['os_family'] == "RedHat"
+
+    - name: Clean up Certificates on Linux machine
+      file:
+        path: "{{ item }}"
+        state: absent
+      become: true
+      with_items:
+        - "~/{{ cn }}.crt"
+        - "~/{{ cn }}.csr"
+        - "~/rooty.cer"
+        - "~/bundle-{{ cn }}.crt"
+

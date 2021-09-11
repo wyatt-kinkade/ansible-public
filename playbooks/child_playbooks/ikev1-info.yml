@@ -1,0 +1,12 @@
+    - name: Parse using module
+      ansible.netcommon.cli_parse:
+        text: "{{ ikev1_info.stdout[0] }}"
+        parser:
+          name: ansible.netcommon.ntc_templates
+#          os: cisco.asa.asa
+          command: show running-config crypto ikev1
+      register: parsed_ikev1
+    - name: Parse show run icry ikev2 Output to JSON
+      set_fact:
+        ike_dict: "{{ parsed_ikev1.parsed }}"
+      when: ikev1_info != "" and ike_version == "1"

@@ -1,0 +1,17 @@
+Value ike_version (\d+)
+Value policy_id (\d+)
+Value encryption (\S+)
+Value auth_algorithm (\S+)
+Value dh_group (group\s*\d+)
+Value auth_algorithm2 (\S+)
+Value lifetime (\d+)
+
+
+Start
+  ^crypto\s+ikev2 -> Continue.Record
+  ^crypto\s+ikev${ike_version}\s+policy\s+${policy_id}\s*
+  ^\s+encryption\s+${encryption}\s*
+  ^\s+integrity\s+${auth_algorithm}\s*
+  ^\s+${dh_group}\s*
+  ^\s+prf\s+${auth_algorithm2}\s*
+  ^\s+lifetime\s+seconds\s+${lifetime}\s*
