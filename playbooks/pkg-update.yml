@@ -1,12 +1,10 @@
 ---
-#Yeah, lots of ignore errors, mainly looking to get vars at some points, and the uri calls seem to fail while actually succeeding so I'd rather not have them end the PB unnessecarily early.
+#I'm almost done with the CentOS in my environment, this is going to be the first package management PB to change given it's ran fairly often
+#Given that this is meant to be scheduled I also have it email on successes and report changes via journal entries in netbox
 - hosts: "{{ selected_devices }}"
   gather_facts: yes
 #  vars_prompt:
-#    - name: rhel_pkg
-#      prompt: Package to install for CentOS (Keep in mind this needs to have the right name for the YUM package manager)
-#      private: no
-#    - name: deb_pkg
+#    - name: pkg
 #      prompt: Package to install for Debian (Keep in mind this needs to have the right name for the APT package manager)
 #      private: no
 #    - name: selected_devices
@@ -17,35 +15,35 @@
 
   tasks:
 
-    - name: Upgrade Package - CentOS
-      yum:
-        name: '{{ rhel_pkg }}'
+    - name: Upgrade Packages 
+      apt:
+        update_cache: yes
+        name: "{{ pkg }}"
         state: latest
-      register: rhel_results
-      ignore_errors: yes
+      register: results
       become: yes
       when: 
-      - ansible_os_family == "RedHat"
-      - rhel_pkg is not undefined 
-      - rhel_pkg.lower() != "all" 
+      - ansible_os_family == "Debian"
+      - pkg is not undefined
+      - pkg.lower() != "all" 
 
     - name: Upgrade all packages
-      yum:
+      apt:
+        update_cache: yes
         name: '*'
         state: latest
-      register: rhel_results
-      ignore_errors: yes
+      register: results
       become: yes
       when: 
-      - ansible_os_family == "RedHat"
-      - rhel_pkg is not undefined 
-      - rhel_pkg.lower() == "all" 
+      - ansible_os_family == "Debian"
+      - pkg is not undefined 
+      - pkg.lower() == "all" 
 
     - debug:
-        msg: "{{ rhel_results }}"
+        msg: "{{ results }}"
       when: 
-      - ansible_os_family == "RedHat"
-      - rhel_pkg is not undefined 
+      - ansible_os_family == "Debian"
+      - pkg is not undefined
 
     - name: Mail Alerts
       mail:
@@ -56,15 +54,13 @@
         to: "{{ to_address }}"
         from: "{{ alerts_mail_acct }}"
         subject: Package Update Successful
-        body: "System {{ inventory_hostname }} has successfully updated {{ rhel_pkg }}"
+        body: "System {{ inventory_hostname }} has successfully updated {{ pkg }}"
       delegate_to: localhost
-      ignore_errors: yes
       when: 
-      - ansible_os_family == "RedHat"
-      - rhel_pkg is not undefined 
-      - rhel_results.failed == false
-      - rhel_results.changed == true
-      - rhel_pkg.lower() != "all" 
+      - ansible_os_family == "Debian"
+      - results is not undefined
+      - results.changed | bool 
+      - pkg.lower() != "all" 
 
     - name: Mail Alerts
       mail:
@@ -77,83 +73,13 @@
         subject: System Update Successful
         body: "System {{ inventory_hostname }} has successfully been updated"
       delegate_to: localhost
-      ignore_errors: yes
-      when: 
-      - ansible_os_family == "RedHat"
-      - rhel_pkg is not undefined 
-      - rhel_results.failed == false
-      - rhel_results.changed == true
-      - rhel_pkg.lower() == "all" 
-
-    - name: Upgrade Package - Debian
-      apt:
-        update_cache: yes
-        name: "{{ deb_pkg }}"
-        state: latest
-      register: deb_results
-      become: yes
-      ignore_errors: yes
       when: 
       - ansible_os_family == "Debian"
-      - deb_pkg is not undefined
-      - deb_pkg.lower() != "all" 
+      - results is defined
+      - results.changed | bool
+      - pkg.lower() == "all"
 
-    - name: Upgrade all packages
-      apt:
-        update_cache: yes
-        name: '*'
-        state: latest
-      register: deb_results
-      become: yes
-      ignore_errors: yes
-      when: 
-      - ansible_os_family == "Debian"
-      - deb_pkg is not undefined 
-      - deb_pkg.lower() == "all" 
-
-    - debug:
-        msg: "{{ deb_results }}"
-      when: 
-      - ansible_os_family == "Debian"
-      - deb_pkg is not undefined
-
-    - name: Mail Alerts
-      mail:
-        host: "{{ mail_srv }}"
-        port: 587
-        username: "{{ alerts_mail_acct }}"
-        password: "{{ alerts_mail_pw }}"
-        to: "{{ to_address }}"
-        from: "{{ alerts_mail_acct }}"
-        subject: Package Update Successful
-        body: "System {{ inventory_hostname }} has successfully updated {{ deb_pkg }}"
-      delegate_to: localhost
-      ignore_errors: yes
-      when: 
-      - ansible_os_family == "Debian"
-      - deb_pkg is not undefined
-      - deb_results.failed == false
-      - deb_results.changed == true
-      - deb_pkg.lower() != "all" 
-
-    - name: Mail Alerts
-      mail:
-        host: "{{ mail_srv }}"
-        port: 587
-        username: "{{ alerts_mail_acct }}"
-        password: "{{ alerts_mail_pw }}"
-        to: "{{ to_address }}"
-        from: "{{ alerts_mail_acct }}"
-        subject: System Update Successful
-        body: "System {{ inventory_hostname }} has successfully been updated"
-      delegate_to: localhost
-      ignore_errors: yes
-      when: 
-      - ansible_os_family == "Debian"
-      - deb_pkg is not undefined
-      - deb_results.failed == false
-      - deb_results.changed == true
-      - deb_pkg.lower() == "all" 
+#No need to email if there's nothing changing
 
     - name: Send Journal Entry to Netbox
       uri:
@@ -164,21 +90,20 @@
           Authorization: "Token {{ nb_token }}"
         force_basic_auth: yes
         body_format: json
+        status_code: 200, 201, 208
         body: "{
-          'assigned_object_type': 'dcim.device',
+          'assigned_object_type': '{% if is_virtual %}virtualization.virtualmachine{% else %}dcim.device{% endif %}',
           'assigned_object_id': {{ id }},
-          'kind': 'info',
+          'kind': 'success',
           'comments': 'Automated Entry: Update Successful'
           }"
         validate_certs: no
       delegate_to: localhost
-      ignore_errors: yes
       when: 
-      - not is_virtual
-      - deb_pkg is not undefined or rhel_pkg is not undefined 
-      - not deb_results.failed or not rhel_results.failed 
-      - deb_results.changed | bool or rhel_results.changed | bool
-      - deb_pkg.lower() == "all" or rhel_pkg.lower() == "all" 
+      - ansible_os_family == "Debian"
+      - results.changed | bool
+      - results is defined 
+      - pkg.lower() == "all" 
 
     - name: Send Journal Entry to Netbox
       uri:
@@ -189,69 +114,18 @@
           Authorization: "Token {{ nb_token }}"
         force_basic_auth: yes
         body_format: json
+        status_code: 200, 201, 208
         body: "{
-          'assigned_object_type': 'dcim.device',
+          'assigned_object_type': '{% if is_virtual %}virtualization.virtualmachine{% else %}dcim.device{% endif %}',
           'assigned_object_id': {{ id }},
           'kind': 'info',
           'comments': 'Automated Entry: No Updates Needed after check'
         }"
         validate_certs: no
       delegate_to: localhost
-      ignore_errors: yes
       when: 
-      - not is_virtual
-      - deb_pkg is not undefined or rhel_pkg is not undefined 
-      - not deb_results.failed or not rhel_results.failed 
-      - not deb_results.changed or not rhel_results.changed
-      - deb_pkg.lower() == "all" or rhel_pkg.lower() == "all" 
-
-    - name: Send Journal Entry to Netbox
-      uri:
-        url: "{{ nb_url }}/api/extras/journal-entries/"
-        method: POST
-        headers:
-          accept: "application/json"
-          Authorization: "Token {{ nb_token }}"
-        force_basic_auth: yes
-        body_format: json
-        body: "{
-          'assigned_object_type': 'virtualization.virtualmachine',
-          'assigned_object_id': {{ id }},
-          'kind': 'info',
-          'comments': 'Automated Entry: Update Successful'
-          }"
-        validate_certs: no
-      delegate_to: localhost
-      ignore_errors: yes
-      when: 
-      - is_virtual | bool
-      - deb_pkg is not undefined or rhel_pkg is not undefined 
-      - not deb_results.failed or not rhel_results.failed 
-      - deb_results.changed | bool or rhel_results.changed | bool
-      - deb_pkg.lower() == "all" or rhel_pkg.lower() == "all" 
-
-    - name: Send Journal Entry to Netbox
-      uri:
-        url: "{{ nb_url }}/api/extras/journal-entries/"
-        method: POST
-        headers:
-          accept: "application/json"
-          Authorization: "Token {{ nb_token }}"
-        force_basic_auth: yes
-        body_format: json
-        body: "{
-          'assigned_object_type': 'virtualization.virtualmachine',
-          'assigned_object_id': {{ id }},
-          'kind': 'info',
-          'comments': 'Automated Entry: No Updates Needed after check'
-        }"
-        validate_certs: no
-      delegate_to: localhost
-      ignore_errors: yes
-      when: 
-      - is_virtual | bool
-      - deb_pkg is not undefined or rhel_pkg is not undefined 
-      - not deb_results.failed or not rhel_results.failed 
-      - not deb_results.changed or not rhel_results.changed
-      - deb_pkg.lower() == "all" or rhel_pkg.lower() == "all" 
+      - ansible_os_family == "Debian"
+      - not results.changed 
+      - results is defined 
+      - pkg.lower() == "all" 
 
