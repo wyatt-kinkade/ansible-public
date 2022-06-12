@@ -1,0 +1,93 @@
+---
+- name: NTP Information Scraping and Remediation
+  hosts: "{{ device }}"
+  gather_facts: false
+  vars_files:
+   - ../inventory/secrets/admin.yml
+   - ../inventory/secrets/systems.yml
+
+  tasks:
+#Static Variable Handling
+    - name: Changing Variables
+      ansible.builtin.set_fact:
+        ntp_servers: "{{ srv_list | replace(' ', '') | split(',') }}"
+
+    - name: Seperate primary NTP server from secondary servers when secondary servers are present
+      ansible.builtin.set_fact:
+        secondary_ntp_servers: "{{ ntp_servers[1:] }}"
+        primary_ntp_server: "{{ ntp_servers[0] }}"
+      when: 
+        - ntp_servers[1] is defined
+        - is_production | bool
+
+#Device Information Gathering
+    - name: Get ASA Facts (Clock Configuration)
+      cisco.asa.asa_command:
+        commands:
+          - sh clock
+          - sh run ntp
+      register: asa_vars
+      when: ansible_network_os == 'cisco.asa.asa'
+
+    - name: Get IOS Device Facts (Clock Configuration)
+      cisco.ios.ios_command:
+        commands:
+          - sh clock
+          - sh run | i ntp
+      register: ios_vars
+      when: ansible_network_os == 'cisco.ios.ios'
+
+#Data Alterations
+    - name: Make Changes to ASAs
+      ansible.builtin.include_tasks: "{{playbook_dir}}/child_playbooks/clocky-facts-asa.yml"
+      when: 
+        - ansible_network_os == 'cisco.asa.asa'
+
+    - name: Make Changes to IOS devices
+      ansible.builtin.include_tasks: "{{playbook_dir}}/child_playbooks/clocky-facts-ios.yml"
+      when: 
+        - ansible_network_os == 'cisco.ios.ios'
+
+#Saving Data to File
+    - name: Generate Files with Times
+      ansible.builtin.template:
+        src: '/runner/project/templates/clocky.j2'
+        dest: '~/clocky-{{inventory_hostname}}.txt'
+        mode: 0666
+      delegate_to: localhost
+
+#Device Alterations
+    - name: Make Changes to ASAs
+      ansible.builtin.include_tasks: "{{playbook_dir}}/child_playbooks/clocky-asa.yml"
+      when: 
+        - is_production | bool
+        - ansible_network_os == 'cisco.asa.asa'
+
+    - name: Make Changes to IOS devices
+      ansible.builtin.include_tasks: "{{playbook_dir}}/child_playbooks/clocky-ios.yml"
+      when: 
+        - is_production | bool
+        - ansible_network_os == 'cisco.ios.ios'
+
+- name: concatenate datavalues into one folder
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+   - ../inventory/secrets/admin.yml
+   - ../inventory/secrets/systems.yml
+  
+  tasks:
+    - name: Concatenate Files together
+      ansible.builtin.shell: cat ~/clocky-*.txt
+      register: all_device_info
+
+#Could do URI/Slack/Teams/E-Mail, given the code is for personal use, I'm using what I've got
+    - name: Send File Contents
+      community.general.discord: 
+          webhook_id: "{{ discord_webhook_id }}"
+          webhook_token: "{{ discord_webhook_token }}"
+          content: "{{ all_device_info.stdout_lines | join('\n') }}"
+
+    - name: Remove Old Files
+      ansible.builtin.shell: rm ~/clocky-*.txt
+

@@ -1,0 +1,34 @@
+    - name: Set Timezone
+      cisco.asa.asa_config:
+        lines:
+        - clock timezone EST -5
+        - clock summer-time EDT recurring
+      when: 
+        - not dev_clock is search('EDT') 
+      register: tz_change
+
+    - name: Add Primary NTP Server
+      cisco.asa.asa_config:
+        lines:
+        - "ntp server {{ primary_ntp_server }} source outside prefer"
+      when: 
+        - primary_ntp_server is defined 
+        - not dev_ntp | bool
+      register: ntp_change
+
+    - name: Add Secondary NTP Servers
+      cisco.asa.asa_config:
+        lines:
+        - "ntp server {{ item }}"
+      when: 
+        - secondary_ntp_servers is defined 
+        - not dev_ntp | bool
+      loop: "{{ secondary_ntp_servers }}" 
+      register: ntp_change
+
+    - name: Write Changes
+      cisco.asa.asa_config:
+        lines:
+        - write
+      when: 
+        - tz_change is defined or ntp_change is defined

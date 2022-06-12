@@ -11,7 +11,7 @@
 
   tasks:
     - name: Setting Initial Facts set full IP addresses to use Cisco Formatting
-      set_fact:
+      ansible.builtin.set_fact:
         ipaddress_list: "{{ ipaddress.replace(' ','').split(',') }}"
 
     - name: Gather and Parse MAC Addresses in the MAC Address Table
@@ -41,12 +41,12 @@
 
   tasks:
     - name: Set arp_objects fact when dev is IOS
-      set_fact:
+      ansible.builtin.set_fact:
         arp_objects: "{{ hostvars[vars['gateway_device']]['ios_arp_info'] }}"
       when: hostvars[vars['gateway_device']]['ios_arp_info'] is defined
 
     - name: Set arp_objects fact when dev is ASA
-      set_fact:
+      ansible.builtin.set_fact:
         arp_objects: "{{ hostvars[vars['gateway_device']]['asa_arp_info'] }}"
       when: hostvars[vars['gateway_device']]['asa_arp_info'] is defined
 
@@ -54,7 +54,9 @@
       ansible.netcommon.cli_parse:
         command: "show mac address-table dynamic | i Mac|-{% for item in arp_objects %}| {{ item.mac }}{% endfor %}"
         parser:
-          name: ansible.netcommon.ntc_templates
+          name: ansible.netcommon.textfsm
+          #using this rather than ntc because I need a list of dicts with strings as values not a list of dicts with lists as the destination port value
+          template_path: "{{playbook_dir}}/ntc_templates/cisco_ios_show_mac-address-table_old.textfsm"
         set_fact: mac_table
 
     - name: Pull switchport interface info for the port the MAC address is on
@@ -67,7 +69,7 @@
       loop: "{{ mac_table }}"
 
     - name: Seperate Parsed Information into List of relevant dictionaries
-      set_fact:
+      ansible.builtin.set_fact:
         parsed_swp_info: "{{ parsed_swp_info|default([]) +  item.0.parsed }}"
       loop: "{{ switchport_info.results|subelements('parsed') }}"
 
@@ -81,30 +83,29 @@
       loop: "{{ mac_table }}"
 
     - name: Seperate Parsed Information into List of relevant dictionaries
-      set_fact:
+      ansible.builtin.set_fact:
         parsed_port_info: "{{ parsed_port_info|default([]) +  item.0.parsed }}"
       loop: "{{ port_info.results|subelements('parsed') }}"
 
     - name: Generate List of Dicts from the past two CLI parsings
-      set_fact:
+      ansible.builtin.set_fact:
         swp_info_mac_table: "{{ swp_info_mac_table|default([])  + [ item.0 | combine(item.1) ] }}"
       loop: "{{ parsed_swp_info|zip(mac_table)|list }}"
 
     - name: Combine table data with port basic information
-      set_fact:
+      ansible.builtin.set_fact:
         full_info: "{{ full_info|default([])  + [ item.0 | combine(item.1) ] }}"
       loop: "{{ mac_table|zip(parsed_port_info)|list }}"
 
     - name: Combine CAM ARP and Port data
-      set_fact:
+      ansible.builtin.set_fact:
         full_info: "{{
           full_info | rejectattr('address','equalto',item.address) | list
           + [ 
               (full_info | selectattr('address','equalto',item.address) | list)[0] 
               | combine((parsed_swp_info|selectattr('interface','equalto',item.destination_port)|list)[0])
               | combine({'ip': (arp_objects|selectattr('mac','equalto',item.destination_address)|list)[0].address})
-            ]
-        }}"
+            ] }}"
       loop: "{{ full_info }}"
 
 #I'd do this a "right way", but any way I've found usually is either janky, or well doesn't work. 
@@ -112,14 +113,14 @@
 #Thankfully the coreutils exist as well as templating features
 
     - name: create html_tables 
-      template:
+      ansible.builtin.template:
         src: '{{playbook_dir}}/../templates/ip-addr-search-mail-bodies.j2'
         dest: '/tmp/{{inventory_hostname}}-mail-bodies.html'
         mode: 0666
       delegate_to: localhost
 
     - name: create_headers 
-      template:
+      ansible.builtin.template:
         src: '{{playbook_dir}}/../templates/ip-addr-search-mail-headers.j2'
         dest: '/tmp/mail-html-headers.html'
         mode: 0666
@@ -127,17 +128,17 @@
       run_once: true
 
     - name: Concatenate All Mail HTML's
-      shell: cat /tmp/mail-html-headers.html /tmp/*-mail-bodies.html >> /tmp/combinedmail.html
+      ansible.builtin.shell: cat /tmp/mail-html-headers.html /tmp/*-mail-bodies.html >> /tmp/combinedmail.html
       delegate_to: localhost
       run_once: true
 
     - name: Remove Old Mail HTML's
-      shell: rm /tmp/*-mail-*.html 
+      ansible.builtin.shell: rm /tmp/*-mail-*.html 
       delegate_to: localhost
       run_once: true
 
     - name: Mail Alerts
-      mail:
+      community.general.mail:
         host: "{{ mail_srv }}"
         port: 587
         username: "{{ alerts_mail_acct }}"
@@ -154,7 +155,7 @@
       - cc_recipients is undefined
 
     - name: Mail Alerts
-      mail:
+      community.general.mail:
         host: "{{ mail_srv }}"
         port: 587
         username: "{{ alerts_mail_acct }}"
@@ -172,17 +173,40 @@
       - cc_recipients is defined
 
 #Needs rewritten I suppose
-    - name: "Configure Slack Response"
-      community.general.slack:
-        token: "{{ slack_token }}"
-        msg: "Formatting may be less than amazing, if you desire better formatting a table was sent to the following addresses\n {% for mail in to_address %}{% if loop.last %}{{ mail }}\n{% else %}{{ mail }},\n{% endif %}{% endfor %}\n**{{inventory_hostname}}**\n```MAC Address\t   Port\t\tVLAN\tPort Mode\tInterface Description\n{% for item in full_info %} {% if loop.last %}{{ item.destination_address }}\t{{ item.destination_port }}\t{{ item.vlan }}\t  {{ item.mode }}\t\t{{ item.description }}{% else %}{{ item.destination_address }}\t{{ item.destination_port }}\t{{ item.vlan }}\t  {{ item.mode }}\t\t{{ item.description }}\n{% endif %}{% endfor %}```"
-        channel: '#random'
-        color: normal
-        validate_certs: no
-      delegate_to: localhost
-
-    - name: Concatenate All Mail HTML's
-      shell: rm /tmp/combinedmail.html
+    - name: Send Interface Information
+      community.general.discord: 
+          webhook_id: "{{ discord_webhook_id }}"
+          webhook_token: "{{ discord_webhook_token }}"
+          content: "Formatting may be less than amazing, if you desire better formatting a table was sent to the following addresses\n {% for mail in to_address %}{% if loop.last %}{{ mail }}\n{% else %}{{ mail }},\n{% endif %}{% endfor %}"
       delegate_to: localhost
       run_once: true
 
+    - name: Send Interface Information
+      community.general.discord: 
+          webhook_id: "{{ discord_webhook_id }}"
+          webhook_token: "{{ discord_webhook_token }}"
+          embeds:
+            - title: "{{ inventory_hostname }}"
+              description: "{{ item.ip }}"
+              fields: 
+                - name: "MAC Address"
+                  value: "{{ item.destination_address }}"
+                  inline: true
+                - name: "Port"
+                  value: "{{ item.destination_port }}"
+                  inline: true
+                - name: "VLAN"
+                  value: "{{ item.vlan }}"
+                  inline: true
+                - name: "Port Mode"
+                  value: "{{ item.mode }}"
+                  inline: true
+                - name: "Interface Description"
+                  value: "{% if item.description %}{{ item.description }}{% else %}N/A{% endif %}"
+                  inline: true
+      loop: "{{ full_info }}"
+
+    - name: Remove All Mail HTML files
+      ansible.builtin.shell: rm /tmp/combinedmail.html
+      delegate_to: localhost
+      run_once: true
