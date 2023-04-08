@@ -1,4 +1,4 @@
-{# Create the object group for Local Rubber Tree hosts #}
+{# Create the object group for Local hosts #}
 object-group network {{ local_device_name }}-TO-{{ site_name.replace(' ', '-').upper() }}
 {% for host in local_object %}
 {% if host | ipaddr('prefix') | int != 32 %}
